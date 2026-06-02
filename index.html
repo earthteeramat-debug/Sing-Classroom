@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="th" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sing-Classroom</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
+  <style>
+* { font-family: 'Prompt', sans-serif; }
+.fade-in { animation: fadeIn 0.3s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+body { box-sizing: border-box; }
+.loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; justify-content: center; align-items: center; color: white; font-size: 1.25rem; z-index: 9999; }
+</style>
+ </head>
+ <body class="h-full bg-gray-50">
+  <div id="loading" class="loading-overlay hidden">กำลังโหลดข้อมูล...</div>
+  <div id="app" class="h-full w-full overflow-auto"></div>
+
+  <script>
+// เชื่อมต่อ Google Sheets API ด้วย URL ของคุณแล้ว
+const API_URL = "https://script.google.com/macros/s/AKfycbxNQRC0-unR5lIZc3B3VwIuh0tQ08a0oQrJ9t7kio9_QjXScWf6XMRqWTn3GULeiXtS_A/exec"; 
+
+// State
+let allData = [];
+let currentView = 'home'; 
+let isAdmin = false;
+let adminPassword = '1234';
+let currentSubView = null;
+let selectedActivity = null;
+let selectedSubject = null;
+let selectedDate = null;
+
+const defaultConfig = {
+  app_title: 'Sing-Classroom',
+  background_color: '#1e3a5f',
+  surface_color: '#ffffff',
+  text_color: '#1e293b',
+  primary_color: '#dc2626',
+  secondary_color: '#1d4ed8'
+};
+
+// ฟังก์ชันเชื่อมต่อรับส่งข้อมูล Google Sheets
+function showLoading(show) {
+  const loader = document.getElementById('loading');
+  if(show) loader.classList.remove('hidden');
+  else loader.classList.add('hidden');
+}
+
+async function fetchData() {
+  showLoading(true);
+  try {
+    const res = await fetch(API_URL);
+    allData = await res.json();
+  } catch (err) {
+    console.error("โหลดข้อมูลล้มเหลว:", err);
+    alert("ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้ กรุณาตรวจสอบการตั้งค่าแท็บและสิทธิ์ของ Web App");
+  }
+  showLoading(false);
+  render();
+}
+
+async function createData(type, payload) {
+  showLoading(true);
+  try {
+    await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'create', type, payload })
+    });
+    await fetchData();
+  } catch (err) {
+    alert("บันทึกข้อมูลล้มเหลว");
+    showLoading(false);
+  }
+}
+
+async function updateData(type, payload) {
+  showLoading(true);
+  try {
+    await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'update', type, payload })
+    });
+    await fetchData();
+  } catch (err) {
+    alert("อัปเดตข้อมูลล้มเหลว");
+    showLoading(false);
+  }
+}
+
+async function deleteData(type, payload) {
+  showLoading(true);
+  try {
+    await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'delete', type, payload })
+    });
+    await fetchData();
+  } catch (err) {
+    alert("ลบข้อมูลล้มเหลว");
+    showLoading(false);
+  }
+}
+
+// Helper functions
+function getRecords(type) { return allData.filter(r => r.type === type); }
+function getStudents() { return getRecords('student'); }
+function getAttendance() { return getRecords('attendance'); }
+function getActivities() { return getRecords('activity'); }
+function getBills() { return getRecords('bill'); }
+function getPayments() { return getRecords('payment'); }
+function getSubjects() { return getRecords('subject'); }
+function getHomework() { return getRecords('homework'); }
+function getPasswordRecord() { return allData.find(r => r.type === 'admin_password'); }
+
+function today() { return new Date().toISOString().split('T')[0]; }
+
+// Render ระบบหน้าบ้าน
+function render() {
+  const app = document.getElementById('app');
+  const config = defaultConfig;
+  const bg = config.background_color;
+  const surface = config.surface_color;
+  const text = config.text_color;
+  const primary = config.primary_color;
+  const secondary = config.secondary_color;
+  const title = config.app_title;
+
+  if (currentView === 'home') {
+    app.innerHTML = renderHome(title, bg, surface, text, primary, secondary);
+  } else if (currentView === 'admin-login') {
+    app.innerHTML = renderAdminLogin(title, bg, surface, text, primary, secondary);
+  } else if (currentView === 'attendance') {
+    app.innerHTML = renderAttendance(bg, surface, text, primary, secondary);
+  } else if (currentView === 'finance') {
+    app.innerHTML = renderFinance(bg, surface, text, primary, secondary);
+  } else if (currentView === 'homework') {
+    app.innerHTML = renderHomeworkView(bg, surface, text, primary, secondary);
+  } else if (currentView === 'admin') {
+    app.innerHTML = renderAdmin(bg, surface, text, primary, secondary);
+  }
+  lucide.createIcons();
+}
+
+function renderHome(title, bg, surface, text, primary, secondary) {
+  return `
+  <div class="min-h-full w-full flex flex-col items-center justify-center p-6" style="background:linear-gradient(135deg,${bg},#0f172a)">
+    <div class="text-center mb-10 fade-in">
+      <h1 class="text-4xl md:text-5xl font-bold text-white mb-2">${title}</h1>
+      <p class="text-blue-200 text-lg">ระบบจัดการห้องเรียน (Google Sheets Real-time)</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full fade-in">
+      <button onclick="navigate('attendance')" class="p-8 rounded-2xl shadow-xl hover:scale-105 transition-all" style="background:${surface}">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:${primary}20">
+          <i data-lucide="clipboard-check" style="color:${primary}" class="w-8 h-8"></i>
+        </div>
+        <h3 class="text-xl font-semibold" style="color:${text}">ระบบเช็คชื่อ</h3>
+        <p class="text-sm mt-2 text-gray-500">เช็คชื่อนักเรียนประจำวัน</p>
+      </button>
+      <button onclick="navigate('finance')" class="p-8 rounded-2xl shadow-xl hover:scale-105 transition-all" style="background:${surface}">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:${secondary}20">
+          <i data-lucide="wallet" style="color:${secondary}" class="w-8 h-8"></i>
+        </div>
+        <h3 class="text-xl font-semibold" style="color:${text}">รายรับรายจ่าย</h3>
+        <p class="text-sm mt-2 text-gray-500">จัดการการเงินห้องเรียน</p>
+      </button>
+      <button onclick="navigate('homework')" class="p-8 rounded-2xl shadow-xl hover:scale-105 transition-all" style="background:${surface}">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:${primary}20">
+          <i data-lucide="book-open" style="color:${primary}" class="w-8 h-8"></i>
+        </div>
+        <h3 class="text-xl font-semibold" style="color:${text}">รายงานการบ้าน</h3>
+        <p class="text-sm mt-2 text-gray-500">ดูและจัดการการบ้าน</p>
+      </button>
+    </div>
+    <button onclick="navigate('admin-login')" class="mt-8 px-6 py-3 rounded-xl text-white font-medium hover:opacity-90 transition" style="background:${primary}">
+      <i data-lucide="shield" class="w-4 h-4 inline mr-2"></i>เข้าสู่ระบบแอดมิน
+    </button>
+  </div>`;
+}
+
+function renderAdminLogin(title, bg, surface, text, primary, secondary) {
+  return `
+  <div class="min-h-full w-full flex items-center justify-center p-6" style="background:linear-gradient(135deg,${bg},#0f172a)">
+    <div class="w-full max-w-sm p-8 rounded-2xl shadow-xl fade-in" style="background:${surface}">
+      <h2 class="text-2xl font-bold text-center mb-6" style="color:${text}">เข้าสู่ระบบแอดมิน</h2>
+      <form onsubmit="handleAdminLogin(event)">
+        <label class="block text-sm font-medium mb-1" style="color:${text}">รหัสผ่าน</label>
+        <input type="password" id="admin-pass" class="w-full border rounded-lg px-4 py-3 mb-4 focus:outline-none focus:ring-2" style="border-color:${secondary};--tw-ring-color:${secondary}" required>
+        <button type="submit" class="w-full py-3 rounded-lg text-white font-semibold" style="background:${primary}">เข้าสู่ระบบ</button>
+      </form>
+      <p id="login-error" class="text-red-500 text-sm mt-3 text-center hidden">รหัสผ่านไม่ถูกต้อง</p>
+      <button onclick="navigate('home')" class="mt-4 w-full text-center text-sm" style="color:${secondary}">← กลับหน้าหลัก</button>
+    </div>
+  </div>`;
+}
+
+function handleAdminLogin(e) {
+  e.preventDefault();
+  const pass = document.getElementById('admin-pass').value;
+  const pwRec = getPasswordRecord();
+  const correctPw = pwRec ? pwRec.admin_password : '1234';
+  if (pass.toString() === correctPw.toString()) {
+    isAdmin = true;
+    currentView = 'admin';
+    render();
+  } else {
+    document.getElementById('login-error').classList.remove('hidden');
+  }
+}
+
+function renderAdmin(bg, surface, text, primary, secondary) {
+  let subContent = '';
+  if (currentSubView === 'change-password') subContent = renderChangePassword(surface, text, primary, secondary);
+  else if (currentSubView === 'manage-students') subContent = renderManageStudents(surface, text, primary, secondary);
+  else if (currentSubView === 'manage-attendance') subContent = renderManageAttendance(surface, text, primary, secondary);
+  else if (currentSubView === 'manage-activities') subContent = renderManageActivities(surface, text, primary, secondary);
+  else if (currentSubView === 'manage-subjects') subContent = renderManageSubjects(surface, text, primary, secondary);
+  else if (currentSubView === 'manage-homework') subContent = renderManageHomework(surface, text, primary, secondary);
+  else if (currentSubView === 'activity-detail') subContent = renderActivityDetail(surface, text, primary, secondary);
+
+  return `
+  <div class="min-h-full w-full" style="background:${bg}10">
+    <header class="p-4 shadow-sm flex items-center justify-between" style="background:${surface}">
+      <div class="flex items-center gap-3">
+        <button onclick="adminBack()" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+        <h1 class="text-xl font-bold" style="color:${text}">แอดมิน</h1>
+      </div>
+      <button onclick="isAdmin=false;currentSubView=null;navigate('home')" class="text-sm px-4 py-2 rounded-lg" style="color:${primary}">ออกจากระบบ</button>
+    </header>
+    <div class="p-4 md:p-6 max-w-5xl mx-auto">
+      ${!currentSubView ? `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 fade-in">
+        <button onclick="currentSubView='manage-students';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="users" style="color:${secondary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">จัดการนักเรียน</h3>
+        </button>
+        <button onclick="currentSubView='manage-attendance';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="clipboard-check" style="color:${primary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">เช็คชื่อนักเรียน</h3>
+        </button>
+        <button onclick="currentSubView='manage-activities';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="wallet" style="color:${secondary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">จัดการกิจกรรม/การเงิน</h3>
+        </button>
+        <button onclick="currentSubView='manage-subjects';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="book" style="color:${primary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">จัดการวิชา</h3>
+        </button>
+        <button onclick="currentSubView='manage-homework';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="book-open" style="color:${secondary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">จัดการการบ้าน</h3>
+        </button>
+        <button onclick="currentSubView='change-password';render()" class="p-6 rounded-xl text-left shadow" style="background:${surface}">
+          <i data-lucide="key" style="color:${primary}" class="w-6 h-6 mb-2"></i>
+          <h3 class="font-semibold" style="color:${text}">เปลี่ยนรหัสผ่าน</h3>
+        </button>
+      </div>` : subContent}
+    </div>
+  </div>`;
+}
+
+function adminBack() {
+  if (currentSubView === 'activity-detail') currentSubView = 'manage-activities';
+  else currentSubView = null;
+  render();
+}
+
+function renderChangePassword(surface, text, primary, secondary) {
+  return `
+  <div class="max-w-sm mx-auto p-6 rounded-xl shadow fade-in" style="background:${surface}">
+    <h3 class="text-lg font-bold mb-4" style="color:${text}">เปลี่ยนรหัสผ่าน</h3>
+    <form onsubmit="handleChangePassword(event)">
+      <label class="block text-sm font-medium mb-1" style="color:${text}">รหัสเดิม</label>
+      <input type="password" id="old-pw" class="w-full border rounded-lg px-3 py-2 mb-3" required>
+      <label class="block text-sm font-medium mb-1" style="color:${text}">รหัสใหม่</label>
+      <input type="password" id="new-pw" class="w-full border rounded-lg px-3 py-2 mb-3" required>
+      <label class="block text-sm font-medium mb-1" style="color:${text}">ยืนยันรหัสใหม่</label>
+      <input type="password" id="confirm-pw" class="w-full border rounded-lg px-3 py-2 mb-4" required>
+      <button type="submit" class="w-full py-2 rounded-lg text-white font-semibold" style="background:${primary}">บันทึก</button>
+    </form>
+    <p id="pw-msg" class="text-sm mt-3 text-center hidden"></p>
+  </div>`;
+}
+
+async function handleChangePassword(e) {
+  e.preventDefault();
+  const oldPw = document.getElementById('old-pw').value;
+  const newPw = document.getElementById('new-pw').value;
+  const confirmPw = document.getElementById('confirm-pw').value;
+  const msg = document.getElementById('pw-msg');
+  const pwRec = getPasswordRecord();
+  const currentPw = pwRec ? pwRec.admin_password : '1234';
+
+  if (oldPw.toString() !== currentPw.toString()) { msg.textContent = 'รหัสเดิมไม่ถูกต้อง'; msg.className = 'text-red-500 text-sm mt-3 text-center'; return; }
+  if (newPw !== confirmPw) { msg.textContent = 'รหัสใหม่ไม่ตรงกัน'; msg.className = 'text-red-500 text-sm mt-3 text-center'; return; }
+
+  if (pwRec) {
+    await updateData('admin_password', { ...pwRec, admin_password: newPw });
+  } else {
+    await createData('admin_password', { admin_password: newPw });
+  }
+  msg.textContent = 'เปลี่ยนรหัสสำเร็จ!'; msg.className = 'text-green-600 text-sm mt-3 text-center';
+}
+
+function renderManageStudents(surface, text, primary, secondary) {
+  const students = getStudents();
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-4" style="color:${text}">เพิ่มนักเรียน</h3>
+      <form onsubmit="handleAddStudent(event)" class="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <input id="s-name" placeholder="ชื่อ-นามสกุล" class="border rounded-lg px-3 py-2" required>
+        <input id="s-number" placeholder="เลขที่" type="number" class="border rounded-lg px-3 py-2" required>
+        <input id="s-id" placeholder="รหัสนักเรียน" class="border rounded-lg px-3 py-2" required>
+        <select id="s-gender" class="border rounded-lg px-3 py-2">
+          <option value="ชาย">ชาย</option><option value="หญิง">หญิง</option>
+        </select>
+        <input id="s-room" placeholder="ห้อง" class="border rounded-lg px-3 py-2" required>
+        <button type="submit" class="md:col-span-5 py-2 rounded-lg text-white font-semibold" style="background:${primary}">เพิ่ม</button>
+      </form>
+    </div>
+    <div class="p-6 rounded-xl shadow" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-3" style="color:${text}">รายชื่อนักเรียน (${students.length})</h3>
+      ${students.length === 0 ? '<p class="text-gray-400 text-center py-4">ยังไม่มีข้อมูล</p>' : `
+      <div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead><tr class="border-b" style="color:${text}"><th class="py-2 text-left">เลขที่</th><th class="text-left">ชื่อ</th><th class="text-left">รหัส</th><th class="text-left">เพศ</th><th class="text-left">ห้อง</th><th></th></tr></thead>
+        <tbody>${students.sort((a,b)=>Number(a.student_number)-Number(b.student_number)).map(s=>`
+          <tr class="border-b"><td class="py-2">${s.student_number}</td><td>${s.name}</td><td>${s.student_id}</td><td>${s.gender}</td><td>${s.room}</td>
+          <td><button onclick="deleteStudent('${s.__backendId}')" class="text-red-500 text-xs hover:underline">ลบ</button></td></tr>`).join('')}
+        </tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+async function handleAddStudent(e) {
+  e.preventDefault();
+  await createData('student', {
+    name: document.getElementById('s-name').value,
+    student_number: Number(document.getElementById('s-number').value),
+    student_id: document.getElementById('s-id').value,
+    gender: document.getElementById('s-gender').value,
+    room: document.getElementById('s-room').value
+  });
+  e.target.reset();
+}
+
+async function deleteStudent(id) {
+  const rec = allData.find(r => r.__backendId === id);
+  if (rec) await deleteData('student', rec);
+}
+
+function renderManageAttendance(surface, text, primary, secondary) {
+  const students = getStudents();
+  const dateVal = selectedDate || today();
+  const attendance = getAttendance().filter(a => a.date === dateVal);
+
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-4" style="color:${text}">เช็คชื่อนักเรียน</h3>
+      <div class="flex items-center gap-3 mb-4">
+        <label class="text-sm font-medium" style="color:${text}">วันที่:</label>
+        <input type="date" id="att-date" value="${dateVal}" onchange="selectedDate=this.value;render()" class="border rounded-lg px-3 py-2">
+      </div>
+      ${students.length === 0 ? '<p class="text-gray-400">กรุณาเพิ่มนักเรียนก่อน</p>' : `
+      <div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead><tr class="border-b"><th class="py-2 text-left">เลขที่</th><th class="text-left">ชื่อ</th><th class="text-center">มา</th><th class="text-center">ขาด</th><th class="text-center">ลาป่วย</th><th class="text-center">ลากิจ</th></tr></thead>
+        <tbody>${students.sort((a,b)=>Number(a.student_number)-Number(b.student_number)).map(s=>{
+          const att = attendance.find(a=>a.student_ref===s.__backendId);
+          const status = att ? att.status : '';
+          return `<tr class="border-b"><td class="py-2">${s.student_number}</td><td>${s.name}</td>
+          ${['มา','ขาด','ลาป่วย','ลากิจ'].map(st=>`<td class="text-center"><button onclick="setAttendance('${s.__backendId}','${dateVal}','${st}')" class="w-8 h-8 rounded-full text-xs font-bold ${status===st?'text-white':'text-gray-400 border'}" style="${status===st?'background:'+primary:''}">${st.charAt(0)}</button></td>`).join('')}
+          </tr>`;
+        }).join('')}</tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+async function setAttendance(studentRef, date, status) {
+  const existing = getAttendance().find(a => a.student_ref === studentRef && a.date === date);
+  if (existing) {
+    await updateData('attendance', { ...existing, status });
+  } else {
+    await createData('attendance', { student_ref: studentRef, date, status });
+  }
+}
+
+function renderManageActivities(surface, text, primary, secondary) {
+  const activities = getActivities();
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-4" style="color:${text}">เพิ่มกิจกรรม</h3>
+      <form onsubmit="handleAddActivity(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input id="act-name" placeholder="ชื่อกิจกรรม" class="border rounded-lg px-3 py-2" required>
+        <select id="act-type" class="border rounded-lg px-3 py-2">
+          <option value="collect">กิจกรรมเก็บเงิน</option>
+          <option value="general">กิจกรรมทั่วไป</option>
+        </select>
+        <input id="act-amount" type="number" placeholder="จำนวนเงินเก็บ (ถ้ามี)" class="border rounded-lg px-3 py-2" value="0">
+        <button type="submit" class="md:col-span-3 py-2 rounded-lg text-white font-semibold" style="background:${secondary}">เพิ่มกิจกรรม</button>
+      </form>
+    </div>
+    <div class="p-6 rounded-xl shadow" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-3" style="color:${text}">กิจกรรมทั้งหมด</h3>
+      ${activities.length===0?'<p class="text-gray-400 text-center py-4">ยังไม่มีกิจกรรม</p>':`
+      <div class="space-y-2">${activities.map(a=>`
+        <div class="flex items-center justify-between p-3 border rounded-lg">
+          <div>
+            <span class="font-medium">${a.activity_name}</span>
+            <span class="text-xs ml-2 px-2 py-0.5 rounded" style="background:${a.activity_type==='collect'?primary:secondary}20;color:${a.activity_type==='collect'?primary:secondary}">${a.activity_type==='collect'?'เก็บเงิน':'ทั่วไป'}</span>
+            ${a.activity_type==='collect'?`<span class="text-xs ml-2 text-gray-500">เก็บ: ${a.collect_amount}฿</span>`:''}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="selectedActivity='${a.__backendId}';currentSubView='activity-detail';render()" class="text-sm px-3 py-1 rounded" style="background:${secondary}20;color:${secondary}">จัดการ</button>
+            <button onclick="deleteActRecord('${a.__backendId}', 'activity')" class="text-sm px-3 py-1 rounded bg-red-50 text-red-500">ลบ</button>
+          </div>
+        </div>`).join('')}</div>`}
+    </div>
+  </div>`;
+}
+
+async function handleAddActivity(e) {
+  e.preventDefault();
+  await createData('activity', {
+    activity_name: document.getElementById('act-name').value,
+    activity_type: document.getElementById('act-type').value,
+    collect_amount: Number(document.getElementById('act-amount').value) || 0
+  });
+  e.target.reset();
+}
+
+function renderActivityDetail(surface, text, primary, secondary) {
+  const activity = allData.find(r => r.__backendId === selectedActivity);
+  if (!activity) return '<p>ไม่พบกิจกรรม</p>';
+  const bills = getBills().filter(b => b.activity_ref === selectedActivity);
+  const payments = getPayments().filter(p => p.activity_ref === selectedActivity);
+  const students = getStudents();
+  const totalBills = bills.reduce((sum, b) => {
+    const amount = Number(b.bill_qty) * Number(b.bill_price);
+    return sum + (b.bill_type === 'รายรับ' ? amount : -amount);
+  }, 0);
+
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-2" style="color:${text}">${activity.activity_name}</h3>
+      <p class="text-sm text-gray-500 mb-4">${activity.activity_type==='collect'?'กิจกรรมเก็บเงิน - เก็บ '+activity.collect_amount+'฿':'กิจกรรมทั่วไป'}</p>
+      ${activity.activity_type==='collect'?`
+      <div class="mb-4">
+        <label class="text-sm font-medium">แก้ไขจำนวนเงินเก็บ:</label>
+        <div class="flex gap-2 mt-1">
+          <input id="edit-amount" type="number" value="${activity.collect_amount}" class="border rounded-lg px-3 py-2 w-32">
+          <button onclick="updateCollectAmount()" class="px-3 py-2 rounded-lg text-white text-sm" style="background:${primary}">บันทึก</button>
+        </div>
+      </div>
+      <h4 class="font-semibold mb-2">สถานะการจ่ายเงิน</h4>
+      <div class="overflow-x-auto"><table class="w-full text-sm mb-4">
+        <thead><tr class="border-b"><th class="py-2 text-left">เลขที่</th><th class="text-left">ชื่อ</th><th class="text-center">จ่ายแล้ว</th></tr></thead>
+        <tbody>${students.sort((a,b)=>Number(a.student_number)-Number(b.student_number)).map(s=>{
+          const paid = payments.find(p=>p.student_ref===s.__backendId);
+          return `<tr class="border-b"><td class="py-2">${s.student_number}</td><td>${s.name}</td>
+          <td class="text-center"><button onclick="togglePayment('${s.__backendId}','${selectedActivity}',${paid?'true':'false'},'${paid?paid.__backendId:''}')" class="w-8 h-8 rounded-full ${paid?'text-white':'border text-gray-300'}" style="${paid?'background:'+primary:''}">✓</button></td></tr>`;
+        }).join('')}</tbody></table></div>`:'' }
+      
+      <h4 class="font-semibold mb-2">บิล / รายการ</h4>
+      <form onsubmit="handleAddBill(event)" class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        <input id="bill-item" placeholder="รายการ" class="border rounded-lg px-3 py-2" required>
+        <select id="bill-type" class="border rounded-lg px-3 py-2">
+          <option value="รายรับ">รายรับ</option><option value="รายจ่าย">รายจ่าย</option>
+        </select>
+        <input id="bill-qty" type="number" placeholder="จำนวน" class="border rounded-lg px-3 py-2" min="1" value="1" required>
+        <input id="bill-price" type="number" placeholder="ราคา/ชิ้น" class="border rounded-lg px-3 py-2" required>
+        <button type="submit" class="py-2 rounded-lg text-white text-sm" style="background:${secondary}">เพิ่มบิล</button>
+      </form>
+      ${bills.length>0?`
+      <table class="w-full text-sm">
+        <thead><tr class="border-b"><th class="py-2 text-left">รายการ</th><th class="text-left">ประเภท</th><th class="text-right">จำนวน</th><th class="text-right">ราคา/ชิ้น</th><th class="text-right">รวม</th><th></th></tr></thead>
+        <tbody>${bills.map(b=>`<tr class="border-b"><td class="py-2">${b.bill_item}</td><td>${b.bill_type}</td><td class="text-right">${b.bill_qty}</td><td class="text-right">${b.bill_price}</td><td class="text-right">${b.bill_qty*b.bill_price}</td>
+        <td><button onclick="deleteActRecord('${b.__backendId}', 'bill')" class="text-red-500 text-xs">ลบ</button></td></tr>`).join('')}
+        </tbody></table>
+      <p class="mt-2 font-semibold text-right ${totalBills<0?'text-red-500':'text-green-600'}">ยอดรวม: ${totalBills}฿ | ต่อคน: ${students.length>0?Math.round(totalBills/students.length*100)/100:0}฿</p>
+      `:'<p class="text-gray-400 text-sm">ยังไม่มีบิล</p>'}
+    </div>
+  </div>`;
+}
+
+async function updateCollectAmount() {
+  const activity = allData.find(r => r.__backendId === selectedActivity);
+  if (activity) {
+    await updateData('activity', { ...activity, collect_amount: Number(document.getElementById('edit-amount').value) });
+  }
+}
+
+async function togglePayment(studentRef, activityRef, isPaid, paymentId) {
+  if (isPaid) {
+    const rec = allData.find(r => r.__backendId === paymentId);
+    if (rec) await deleteData('payment', rec);
+  } else {
+    await createData('payment', { student_ref: studentRef, activity_ref: activityRef, paid: true });
+  }
+}
+
+async function handleAddBill(e) {
+  e.preventDefault();
+  await createData('bill', {
+    activity_ref: selectedActivity,
+    bill_item: document.getElementById('bill-item').value,
+    bill_type: document.getElementById('bill-type').value,
+    bill_qty: Number(document.getElementById('bill-qty').value),
+    bill_price: Number(document.getElementById('bill-price').value)
+  });
+  e.target.reset();
+}
+
+function renderManageSubjects(surface, text, primary, secondary) {
+  const subjects = getSubjects();
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-4" style="color:${text}">เพิ่มวิชา</h3>
+      <form onsubmit="handleAddSubject(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input id="sub-name" placeholder="ชื่อวิชา" class="border rounded-lg px-3 py-2" required>
+        <input id="sub-code" placeholder="รหัสวิชา" class="border rounded-lg px-3 py-2" required>
+        <input id="sub-teacher" placeholder="ชื่อครู" class="border rounded-lg px-3 py-2" required>
+        <button type="submit" class="md:col-span-3 py-2 rounded-lg text-white font-semibold" style="background:${primary}">เพิ่มวิชา</button>
+      </form>
+    </div>
+    <div class="p-6 rounded-xl shadow" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-3" style="color:${text}">วิชาทั้งหมด</h3>
+      ${subjects.length===0?'<p class="text-gray-400 text-center py-4">ยังไม่มีวิชา</p>':`
+      <div class="space-y-2">${subjects.map(s=>`
+        <div class="flex items-center justify-between p-3 border rounded-lg">
+          <div><span class="font-medium">${s.subject_name}</span> <span class="text-xs text-gray-500">(${s.subject_code})</span><br><span class="text-xs text-gray-500">ครู: ${s.teacher_name}</span></div>
+          <button onclick="deleteActRecord('${s.__backendId}', 'subject')" class="text-red-500 text-xs">ลบ</button>
+        </div>`).join('')}</div>`}
+    </div>
+  </div>`;
+}
+
+async function handleAddSubject(e) {
+  e.preventDefault();
+  await createData('subject', {
+    subject_name: document.getElementById('sub-name').value,
+    subject_code: document.getElementById('sub-code').value,
+    teacher_name: document.getElementById('sub-teacher').value
+  });
+  e.target.reset();
+}
+
+function renderManageHomework(surface, text, primary, secondary) {
+  const subjects = getSubjects();
+  const homeworks = getHomework();
+  return `
+  <div class="fade-in">
+    <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-4" style="color:${text}">เพิ่มการบ้าน</h3>
+      <form onsubmit="handleAddHomework(event)" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <select id="hw-subject" class="border rounded-lg px-3 py-2" required>
+          <option value="">เลือกวิชา</option>
+          ${subjects.map(s=>`<option value="${s.__backendId}">${s.subject_name}</option>`).join('')}
+        </select>
+        <input id="hw-title" placeholder="ชื่อการบ้าน" class="border rounded-lg px-3 py-2" required>
+        <input id="hw-detail" placeholder="รายละเอียด" class="border rounded-lg px-3 py-2">
+        <input id="hw-assign" type="date" class="border rounded-lg px-3 py-2" value="${today()}" required>
+        <input id="hw-due" type="date" class="border rounded-lg px-3 py-2" required>
+        <button type="submit" class="md:col-span-2 py-2 rounded-lg text-white font-semibold" style="background:${secondary}">เพิ่มการบ้าน</button>
+      </form>
+    </div>
+    <div class="p-6 rounded-xl shadow" style="background:${surface}">
+      <h3 class="text-lg font-bold mb-3" style="color:${text}">การบ้านทั้งหมด</h3>
+      ${homeworks.length===0?'<p class="text-gray-400 text-center py-4">ยังไม่มีการบ้าน</p>':`
+      <div class="space-y-2">${homeworks.map(h=>{
+        const sub = subjects.find(s=>s.__backendId===h.subject_ref);
+        return `<div class="flex items-center justify-between p-3 border rounded-lg">
+          <div><span class="font-medium">${h.homework_title}</span><br>
+          <span class="text-xs text-gray-500">${sub?sub.subject_name:'?'} | สั่ง: ${h.assign_date} | ส่ง: ${h.due_date}</span><br>
+          <span class="text-xs text-gray-400">${h.homework_detail||''}</span></div>
+          <button onclick="deleteActRecord('${h.__backendId}', 'homework')" class="text-red-500 text-xs">ลบ</button>
+        </div>`;
+      }).join('')}</div>`}
+    </div>
+  </div>`;
+}
+
+async function handleAddHomework(e) {
+  e.preventDefault();
+  await createData('homework', {
+    subject_ref: document.getElementById('hw-subject').value,
+    homework_title: document.getElementById('hw-title').value,
+    homework_detail: document.getElementById('hw-detail').value,
+    assign_date: document.getElementById('hw-assign').value,
+    due_date: document.getElementById('hw-due').value
+  });
+  e.target.reset();
+}
+
+async function deleteActRecord(id, type) {
+  const rec = allData.find(r => r.__backendId === id);
+  if (rec) await deleteData(type, rec);
+}
+
+// PUBLIC VIEWS
+function renderAttendance(bg, surface, text, primary, secondary) {
+  const students = getStudents();
+  const dateVal = selectedDate || today();
+  const attendance = getAttendance().filter(a => a.date === dateVal);
+
+  return `
+  <div class="min-h-full w-full" style="background:${bg}08">
+    <header class="p-4 shadow-sm flex items-center gap-3" style="background:${surface}">
+      <button onclick="navigate('home')" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+      <h1 class="text-xl font-bold" style="color:${text}">ระบบเช็คชื่อ</h1>
+    </header>
+    <div class="p-4 md:p-6 max-w-4xl mx-auto fade-in">
+      <div class="p-6 rounded-xl shadow" style="background:${surface}">
+        <div class="flex items-center gap-3 mb-4">
+          <label class="text-sm font-medium" style="color:${text}">วันที่:</label>
+          <input type="date" value="${dateVal}" onchange="selectedDate=this.value;render()" class="border rounded-lg px-3 py-2">
+        </div>
+        ${students.length===0?'<p class="text-gray-400 text-center py-8">ยังไม่มีข้อมูลนักเรียน</p>':`
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="border-b"><th class="py-2 text-left">เลขที่</th><th class="text-left">ชื่อ</th><th class="text-left">ห้อง</th><th class="text-center">สถานะ</th></tr></thead>
+          <tbody>${students.sort((a,b)=>Number(a.student_number)-Number(b.student_number)).map(s=>{
+            const att = attendance.find(a=>a.student_ref===s.__backendId);
+            const status = att ? att.status : '-';
+            const color = status==='มา'?'text-green-600':status==='ขาด'?'text-red-500':status==='ลาป่วย'?'text-yellow-600':status==='ลากิจ'?'text-blue-500':'text-gray-400';
+            return `<tr class="border-b"><td class="py-2">${s.student_number}</td><td>${s.name}</td><td>${s.room}</td><td class="text-center font-medium ${color}">${status}</td></tr>`;
+          }).join('')}</tbody></table></div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderFinance(bg, surface, text, primary, secondary) {
+  const activities = getActivities();
+  const students = getStudents();
+
+  if (selectedActivity) {
+    return renderFinanceDetail(bg, surface, text, primary, secondary);
+  }
+
+  return `
+  <div class="min-h-full w-full" style="background:${bg}08">
+    <header class="p-4 shadow-sm flex items-center gap-3" style="background:${surface}">
+      <button onclick="navigate('home')" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+      <h1 class="text-xl font-bold" style="color:${text}">รายรับรายจ่าย</h1>
+    </header>
+    <div class="p-4 md:p-6 max-w-4xl mx-auto fade-in">
+      <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">สรุปยอดรวมต่อนักเรียน</h3>
+        ${students.length===0?'<p class="text-gray-400">ยังไม่มีข้อมูล</p>':`
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="border-b"><th class="py-2 text-left">เลขที่</th><th class="text-left">ชื่อ</th><th class="text-right">ค้างจ่าย</th><th class="text-right">ส่วนที่เหลือ</th></tr></thead>
+          <tbody>${students.sort((a,b)=>Number(a.student_number)-Number(b.student_number)).map(s=>{
+            let owed = 0;
+            let surplus = 0;
+            activities.forEach(act=>{
+              if(act.activity_type==='collect'){
+                const paid = getPayments().find(p=>p.student_ref===s.__backendId&&p.activity_ref===act.__backendId);
+                if(!paid) owed += (Number(act.collect_amount)||0);
+              }
+              const actBills = getBills().filter(b=>b.activity_ref===act.__backendId);
+              const total = actBills.reduce((sum,b)=>sum+(b.bill_type==='รายรับ'?Number(b.bill_qty)*Number(b.bill_price):-(Number(b.bill_qty)*Number(b.bill_price))),0);
+              if(students.length>0) surplus += total/students.length;
+            });
+            return `<tr class="border-b"><td class="py-2">${s.student_number}</td><td>${s.name}</td><td class="text-right text-red-500">${owed>0?owed+'฿':'-'}</td><td class="text-right ${surplus>=0?'text-green-600':'text-red-500'}">${Math.round(surplus*100)/100}฿</td></tr>`;
+          }).join('')}</tbody></table></div>`}
+      </div>
+      <div class="p-6 rounded-xl shadow" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">กิจกรรม</h3>
+        ${activities.length===0?'<p class="text-gray-400">ยังไม่มีกิจกรรม</p>':`
+        <div class="space-y-2">${activities.map(a=>`
+          <button onclick="selectedActivity='${a.__backendId}';render()" class="w-full flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
+            <span class="font-medium">${a.activity_name}</span>
+            <span class="text-xs px-2 py-0.5 rounded" style="background:${a.activity_type==='collect'?primary:secondary}20;color:${a.activity_type==='collect'?primary:secondary}">${a.activity_type==='collect'?'เก็บเงิน':'ทั่วไป'}</span>
+          </button>`).join('')}</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderFinanceDetail(bg, surface, text, primary, secondary) {
+  const activity = allData.find(r=>r.__backendId===selectedActivity);
+  if(!activity) { selectedActivity=null; render(); return ''; }
+  const bills = getBills().filter(b=>b.activity_ref===selectedActivity);
+  const payments = getPayments().filter(p=>p.activity_ref===selectedActivity);
+  const students = getStudents();
+
+  return `
+  <div class="min-h-full w-full" style="background:${bg}08">
+    <header class="p-4 shadow-sm flex items-center gap-3" style="background:${surface}">
+      <button onclick="selectedActivity=null;render()" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+      <h1 class="text-xl font-bold" style="color:${text}">${activity.activity_name}</h1>
+    </header>
+    <div class="p-4 md:p-6 max-w-4xl mx-auto fade-in">
+      ${activity.activity_type==='collect'?`
+      <div class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">สถานะการจ่ายเงิน (${activity.collect_amount}฿)</h3>
+        <table class="w-full text-sm">
+          <thead><tr class="border-b"><th class="py-2 text-left">ชื่อ</th><th class="text-center">สถานะ</th></tr></thead>
+          <tbody>${students.map(s=>{
+            const paid = payments.find(p=>p.student_ref===s.__backendId);
+            return `<tr class="border-b"><td class="py-2">${s.name}</td><td class="text-center ${paid?'text-green-600':'text-red-500'}">${paid?'จ่ายแล้ว':'ยังไม่จ่าย'}</td></tr>`;
+          }).join('')}</tbody></table>
+      </div>`:'' }
+      <div class="p-6 rounded-xl shadow" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">รายการบิล</h3>
+        ${bills.length===0?'<p class="text-gray-400">ไม่มีบิล</p>':`
+        <table class="w-full text-sm">
+          <thead><tr class="border-b"><th class="py-2 text-left">รายการ</th><th class="text-left">ประเภท</th><th class="text-right">จำนวน</th><th class="text-right">ราคา</th><th class="text-right">รวม</th></tr></thead>
+          <tbody>${bills.map(b=>`<tr class="border-b"><td class="py-2">${b.bill_item}</td><td>${b.bill_type}</td><td class="text-right">${b.bill_qty}</td><td class="text-right">${b.bill_price}</td><td class="text-right">${b.bill_qty*b.bill_price}฿</td></tr>`).join('')}</tbody>
+        </table>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderHomeworkView(bg, surface, text, primary, secondary) {
+  const subjects = getSubjects();
+  const homeworks = getHomework();
+  const todayStr = today();
+
+  if (selectedSubject) {
+    const sub = subjects.find(s=>s.__backendId===selectedSubject);
+    const subHw = homeworks.filter(h=>h.subject_ref===selectedSubject);
+    return `
+    <div class="min-h-full w-full" style="background:${bg}08">
+      <header class="p-4 shadow-sm flex items-center gap-3" style="background:${surface}">
+        <button onclick="selectedSubject=null;render()" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+        <h1 class="text-xl font-bold" style="color:${text}">${sub?sub.subject_name:'วิชา'}</h1>
+      </header>
+      <div class="p-4 md:p-6 max-w-4xl mx-auto fade-in">
+        <div class="p-6 rounded-xl shadow" style="background:${surface}">
+          ${subHw.length===0?'<p class="text-gray-400">ไม่มีการบ้าน</p>':`
+          <div class="space-y-3">${subHw.map(h=>`
+            <div class="p-3 border rounded-lg">
+              <div class="flex justify-between items-start">
+                <span class="font-medium">${h.homework_title}</span>
+                <span class="text-xs px-2 py-0.5 rounded ${h.due_date>=todayStr?'bg-green-100 text-green-700':'bg-red-100 text-red-600'}">${h.due_date>=todayStr?'ยังไม่ถึงกำหนด':'เลยกำหนดแล้ว'}</span>
+              </div>
+              <p class="text-xs text-gray-500 mt-1">สั่ง: ${h.assign_date} | กำหนดส่ง: ${h.due_date}</p>
+              ${h.homework_detail?`<p class="text-sm text-gray-600 mt-1">${h.homework_detail}</p>`:''}
+            </div>`).join('')}</div>`}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const todayHw = homeworks.filter(h=>h.assign_date===todayStr);
+  const pendingHw = homeworks.filter(h=>h.due_date>=todayStr);
+
+  return `
+  <div class="min-h-full w-full" style="background:${bg}08">
+    <header class="p-4 shadow-sm flex items-center gap-3" style="background:${surface}">
+      <button onclick="navigate('home')" class="p-2 rounded-lg hover:bg-gray-100"><i data-lucide="arrow-left" class="w-5 h-5"></i></button>
+      <h1 class="text-xl font-bold" style="color:${text}">รายงานการบ้าน</h1>
+    </header>
+    <div class="p-4 md:p-6 max-w-4xl mx-auto fade-in">
+      <div class="flex gap-3 mb-4 flex-wrap">
+        <button onclick="document.getElementById('today-section').scrollIntoView({behavior:'smooth'})" class="px-4 py-2 rounded-lg text-white text-sm" style="background:${primary}">การบ้านวันนี้ (${todayHw.length})</button>
+        <button onclick="document.getElementById('pending-section').scrollIntoView({behavior:'smooth'})" class="px-4 py-2 rounded-lg text-white text-sm" style="background:${secondary}">ยังไม่ถึงกำหนด (${pendingHw.length})</button>
+      </div>
+      <div id="today-section" class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">📋 การบ้านวันนี้ (${todayStr})</h3>
+        ${todayHw.length===0?'<p class="text-gray-400">ไม่มีการบ้านวันนี้</p>':`
+        <div class="space-y-2">${todayHw.map(h=>{
+          const sub=subjects.find(s=>s.__backendId===h.subject_ref);
+          return `<div class="p-3 border rounded-lg"><span class="font-medium">${h.homework_title}</span><br><span class="text-xs text-gray-500">${sub?sub.subject_name:'?'} | ส่ง: ${h.due_date}</span>${h.homework_detail?`<br><span class="text-sm text-gray-600">${h.homework_detail}</span>`:''}</div>`;
+        }).join('')}</div>`}
+      </div>
+      <div id="pending-section" class="p-6 rounded-xl shadow mb-4" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">⏳ ยังไม่ถึงกำหนดส่ง</h3>
+        ${pendingHw.length===0?'<p class="text-gray-400">ไม่มี</p>':`
+        <div class="space-y-2">${pendingHw.map(h=>{
+          const sub=subjects.find(s=>s.__backendId===h.subject_ref);
+          return `<div class="p-3 border rounded-lg"><span class="font-medium">${h.homework_title}</span><br><span class="text-xs text-gray-500">${sub?sub.subject_name:'?'} | สั่ง: ${h.assign_date} | ส่ง: ${h.due_date}</span></div>`;
+        }).join('')}</div>`}
+      </div>
+      <div class="p-6 rounded-xl shadow" style="background:${surface}">
+        <h3 class="font-bold mb-3" style="color:${text}">📚 ดูตามวิชา</h3>
+        ${subjects.length===0?'<p class="text-gray-400">ยังไม่มีวิชา</p>':`
+        <div class="space-y-2">${subjects.map(s=>`
+          <button onclick="selectedSubject='${s.__backendId}';render()" class="w-full text-left p-3 border rounded-lg hover:bg-gray-50">
+            <span class="font-medium">${s.subject_name}</span> <span class="text-xs text-gray-500">(${s.subject_code})</span><br>
+            <span class="text-xs text-gray-400">ครู${s.teacher_name}</span>
+          </button>`).join('')}</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function navigate(view) {
+  currentView = view;
+  currentSubView = null;
+  if (view === 'home') { selectedActivity = null; selectedSubject = null; }
+  render();
+}
+
+// เริ่มต้นโหลดข้อมูล
+fetchData();
+</script>
+ </body>
+</html>
